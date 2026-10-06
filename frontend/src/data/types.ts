@@ -17,6 +17,8 @@ export type ModuleMeta = {
   statuses: string[]
   actions: string[]
   actionTargets: Record<string, string>
+  // 每个动作允许从哪些状态发起：不在列的一律按跳档打回，流转次序以此为准。
+  actionSources: Record<string, string[]>
   metrics: string[]
 }
 
@@ -30,6 +32,18 @@ export type PageResult = {
 export type ActionResult = {
   ok: boolean
   message: string
+}
+
+// 动作随单附带的业务数据：确认完工时的完工日期、更换部件、完工结论等。
+export type ActionPayload = Record<string, string>
+
+export type ImportResult = {
+  ok: boolean
+  message: string
+  imported: number
+  duplicated: number
+  conflicted: number
+  rejected: number
 }
 
 export type OverviewResult = {

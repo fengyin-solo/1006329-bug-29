@@ -3,20 +3,31 @@
     <header class="page-head">
       <div>
         <h2>运维值班交接管理</h2>
-        <p class="page-desc">维护值班交接记录，围绕交接编号、值班班组、值班日期、班次做登记、筛选与状态流转。</p>
+        <p class="page-desc">维护值班交接记录，围绕交接编号、值班班组、值班日期、班次做登记、筛选与状态流转。巡检上报的问题自动落入本页遗留清单。</p>
       </div>
       <div class="page-actions">
-        <button class="btn primary" type="button" @click="openCreate">登记值班交接记录</button>
         <button class="btn" type="button" @click="exportRows">导出运维值班交接清单</button>
       </div>
     </header>
 
     <div class="stat-row">
-      <article v-for="item in stats" :key="item.label" class="stat-card">
+      <article v-for="item in liveStats" :key="item.label" class="stat-card">
         <span class="stat-label">{{ item.label }}</span>
         <strong class="stat-value">{{ item.value }}</strong>
       </article>
     </div>
+
+    <section class="backlog-panel">
+      <h3>遗留清单（{{ backlog.backlog }} 条，与巡检已上报 {{ backlog.reported }} 条一致）</h3>
+      <ul v-if="backlog.items.length">
+        <li v-for="item in backlog.items" :key="String(item.id)">
+          <strong>{{ item['交接编号'] }}</strong>
+          <span>{{ item['交接事项'] }}</span>
+          <em>来源：{{ item['来源巡检编号'] }} · {{ item['值班日期'] }}</em>
+        </li>
+      </ul>
+      <p v-else class="empty-state">暂无遗留事项</p>
+    </section>
 
     <p class="status-legend">
       <span v-for="item in statusSummary" :key="item.status" class="legend-item">
@@ -43,11 +54,11 @@
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
-          <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
+          <td v-for="column in columns" :key="column">{{ row[column] || '—' }}</td>
           <td>{{ row.status }}</td>
           <td class="row-actions">
             <button
-              v-for="action in actions"
+              v-for="action in rowActions(row)"
               :key="action"
               class="link"
               type="button"
@@ -58,13 +69,14 @@
           </td>
         </tr>
         <tr v-if="!rows.length">
-          <td :colspan="columns.length + 2" class="empty-state">暂无运维值班交接数据，可先登记值班交接记录</td>
+          <td :colspan="columns.length + 2" class="empty-state">暂无运维值班交接数据</td>
         </tr>
       </tbody>
     </table>
 
     <footer class="page-foot">
       <span>共 {{ total }} 条运维值班交接记录</span>
+      <span v-if="noticeMessage" class="notice-text">{{ noticeMessage }}</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
     </footer>
   </section>
@@ -74,6 +86,8 @@
 import { computed, onMounted, ref } from 'vue'
 
 import {
+  availableActions,
+  backlogSummary,
   downloadEntries,
   listEntries,
   moduleMeta,
@@ -83,21 +97,32 @@ import type { EntryRow } from '@/data/types'
 
 const meta = moduleMeta('duty')
 const columns = ["交接编号", "值班班组", "值班日期", "班次", "值班人员", "交接事项", "交接人员", "交接状态"]
-const actions = ["发起交接", "确认交接", "登记遗留"]
 const statuses = ["待交接", "交接中", "已交接", "有遗留"]
-const stats = [{"label": "待交接班次", "value": 0}, {"label": "已交接班次", "value": 0}, {"label": "有遗留事项", "value": 0}]
 
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
 const errorMessage = ref('')
+const noticeMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+const backlog = ref({ reported: 0, backlog: 0, items: [] as EntryRow[] })
+
 const statusSummary = computed(() =>
   statuses.map((status: string) => ({
     status,
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
+
+const liveStats = computed(() => [
+  { label: '待交接班次', value: rows.value.filter((row) => row.status === '待交接').length },
+  { label: '已交接班次', value: rows.value.filter((row) => row.status === '已交接').length },
+  { label: '遗留清单条数', value: backlog.value.backlog },
+])
+
+function rowActions(row: EntryRow) {
+  return availableActions(meta.key, row)
+}
 
 function resetFilters() {
   filters.value = {}
@@ -108,17 +133,15 @@ function exportRows() {
   downloadEntries(meta.key)
 }
 
-function openCreate() {
-  errorMessage.value = '值班交接记录登记入口尚未接入审批流'
-}
-
 function runAction(action: string, row: EntryRow) {
   errorMessage.value = ''
+  noticeMessage.value = ''
   const result = applyAction(meta.key, Number(row.id), action)
   if (!result.ok) {
     errorMessage.value = result.message
     return
   }
+  noticeMessage.value = result.message
   reload()
 }
 
@@ -128,6 +151,7 @@ function reload() {
     const payload = listEntries(meta.key, filters.value)
     rows.value = payload.items
     total.value = payload.total
+    backlog.value = backlogSummary()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '运维值班交接列表读取失败'
   }

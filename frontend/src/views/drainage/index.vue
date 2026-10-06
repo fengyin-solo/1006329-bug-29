@@ -47,7 +47,7 @@
           <td>{{ row.status }}</td>
           <td class="row-actions">
             <button
-              v-for="action in actions"
+              v-for="action in rowActions(row)"
               :key="action"
               class="link"
               type="button"
@@ -74,6 +74,7 @@
 import { computed, onMounted, ref } from 'vue'
 
 import {
+  availableActions,
   downloadEntries,
   listEntries,
   moduleMeta,
@@ -83,7 +84,6 @@ import type { EntryRow } from '@/data/types'
 
 const meta = moduleMeta('drainage')
 const columns = ["泵坑编号", "所属舱室", "集水坑容积", "当前水位", "启泵水位", "排水泵编号", "值班人员", "排水状态"]
-const actions = ["启动排水", "确认正常", "上报故障"]
 const statuses = ["待排水", "排水中", "水位正常", "水泵故障"]
 const stats = [{"label": "待排水泵坑", "value": 0}, {"label": "排水中泵坑", "value": 0}, {"label": "水泵故障数", "value": 0}]
 
@@ -98,6 +98,10 @@ const statusSummary = computed(() =>
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
+
+function rowActions(row: EntryRow) {
+  return availableActions(meta.key, row)
+}
 
 function resetFilters() {
   filters.value = {}

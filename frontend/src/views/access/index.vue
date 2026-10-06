@@ -47,7 +47,7 @@
           <td>{{ row.status }}</td>
           <td class="row-actions">
             <button
-              v-for="action in actions"
+              v-for="action in rowActions(row)"
               :key="action"
               class="link"
               type="button"
@@ -74,6 +74,7 @@
 import { computed, onMounted, ref } from 'vue'
 
 import {
+  availableActions,
   downloadEntries,
   listEntries,
   moduleMeta,
@@ -83,7 +84,6 @@ import type { EntryRow } from '@/data/types'
 
 const meta = moduleMeta('access')
 const columns = ["点位编号", "所属出入口", "门禁类型", "监控覆盖", "授权人数", "检查日期", "检查人员", "安防状态"]
-const actions = ["提交检查", "判定正常", "提出整改"]
 const statuses = ["待检查", "检查中", "状态正常", "需整改"]
 const stats = [{"label": "待检查点位", "value": 0}, {"label": "状态正常点位", "value": 0}, {"label": "需整改点位", "value": 0}]
 
@@ -98,6 +98,10 @@ const statusSummary = computed(() =>
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
+
+function rowActions(row: EntryRow) {
+  return availableActions(meta.key, row)
+}
 
 function resetFilters() {
   filters.value = {}

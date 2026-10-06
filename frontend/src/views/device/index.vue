@@ -2,17 +2,19 @@
   <section class="page" data-module="device">
     <header class="page-head">
       <div>
-        <h2>设备台账管理管理</h2>
-        <p class="page-desc">维护管廊设备，围绕设备编号、设备名称、设备型号、所属舱室做登记、筛选与状态流转。</p>
+        <h2>设备台账管理</h2>
+        <p class="page-desc">
+          维护管廊设备台账与保养计划。检修完工会自动在这里新增一条「待保养」，
+          完工结论写入保养计划列，同一检修单只落一条。
+        </p>
       </div>
       <div class="page-actions">
-        <button class="btn primary" type="button" @click="openCreate">登记管廊设备</button>
         <button class="btn" type="button" @click="exportRows">导出设备台账管理清单</button>
       </div>
     </header>
 
     <div class="stat-row">
-      <article v-for="item in stats" :key="item.label" class="stat-card">
+      <article v-for="item in liveStats" :key="item.label" class="stat-card">
         <span class="stat-label">{{ item.label }}</span>
         <strong class="stat-value">{{ item.value }}</strong>
       </article>
@@ -43,11 +45,11 @@
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
-          <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
+          <td v-for="column in columns" :key="column">{{ row[column] || '—' }}</td>
           <td>{{ row.status }}</td>
           <td class="row-actions">
             <button
-              v-for="action in actions"
+              v-for="action in rowActions(row)"
               :key="action"
               class="link"
               type="button"
@@ -58,13 +60,14 @@
           </td>
         </tr>
         <tr v-if="!rows.length">
-          <td :colspan="columns.length + 2" class="empty-state">暂无设备台账管理数据，可先登记管廊设备</td>
+          <td :colspan="columns.length + 2" class="empty-state">暂无设备台账管理数据</td>
         </tr>
       </tbody>
     </table>
 
     <footer class="page-foot">
       <span>共 {{ total }} 条设备台账管理记录</span>
+      <span v-if="noticeMessage" class="notice-text">{{ noticeMessage }}</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
     </footer>
   </section>
@@ -74,6 +77,7 @@
 import { computed, onMounted, ref } from 'vue'
 
 import {
+  availableActions,
   downloadEntries,
   listEntries,
   moduleMeta,
@@ -82,14 +86,13 @@ import {
 import type { EntryRow } from '@/data/types'
 
 const meta = moduleMeta('device')
-const columns = ["设备编号", "设备名称", "设备型号", "所属舱室", "投运日期", "保养周期", "上次保养日", "设备状态"]
-const actions = ["登记运行", "完成保养", "报废设备"]
+const columns = ["设备编号", "设备名称", "设备型号", "所属舱室", "投运日期", "保养周期", "上次保养日", "设备状态", "保养计划"]
 const statuses = ["待保养", "运行中", "已保养", "已报废"]
-const stats = [{"label": "运行中设备", "value": 0}, {"label": "待保养设备", "value": 0}, {"label": "已报废设备", "value": 0}]
 
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
 const errorMessage = ref('')
+const noticeMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
 const statusSummary = computed(() =>
@@ -98,6 +101,16 @@ const statusSummary = computed(() =>
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
+
+const liveStats = computed(() => [
+  { label: '运行中设备', value: rows.value.filter((row) => row.status === '运行中').length },
+  { label: '待保养设备', value: rows.value.filter((row) => row.status === '待保养').length },
+  { label: '已报废设备', value: rows.value.filter((row) => row.status === '已报废').length },
+])
+
+function rowActions(row: EntryRow) {
+  return availableActions(meta.key, row)
+}
 
 function resetFilters() {
   filters.value = {}
@@ -108,17 +121,15 @@ function exportRows() {
   downloadEntries(meta.key)
 }
 
-function openCreate() {
-  errorMessage.value = '管廊设备登记入口尚未接入审批流'
-}
-
 function runAction(action: string, row: EntryRow) {
   errorMessage.value = ''
+  noticeMessage.value = ''
   const result = applyAction(meta.key, Number(row.id), action)
   if (!result.ok) {
     errorMessage.value = result.message
     return
   }
+  noticeMessage.value = result.message
   reload()
 }
 

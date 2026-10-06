@@ -1,3 +1,4 @@
+import { migrateStore } from './migrate'
 import { SEED_ROWS } from './seed'
 import type { EntryRow } from './types'
 
@@ -8,21 +9,42 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
+function todayText(): string {
+  const now = new Date()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${now.getFullYear()}-${month}-${day}`
+}
+
+function persist(store: Record<string, EntryRow[]>): void {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store))
+  }
+}
+
 function readStorage(): Record<string, EntryRow[]> {
   const fallback = clone(SEED_ROWS)
   if (typeof window === 'undefined' || !window.localStorage) {
+    migrateStore(fallback, todayText())
     return fallback
   }
   const raw = window.localStorage.getItem(STORAGE_KEY)
   if (!raw) {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(fallback))
+    // 首次播种也要先跑迁移（回填计划工期、镜像状态字段）再落库。
+    migrateStore(fallback, todayText())
+    persist(fallback)
     return fallback
   }
   try {
     const parsed = JSON.parse(raw) as Record<string, EntryRow[]>
-    return { ...fallback, ...parsed }
+    const merged = { ...fallback, ...parsed }
+    // 读库时跑存量迁移（计划工期回填、状态字段镜像），有改动就顺手落库。
+    if (migrateStore(merged, todayText())) {
+      persist(merged)
+    }
+    return merged
   } catch {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(fallback))
+    persist(fallback)
     return fallback
   }
 }
@@ -41,11 +63,13 @@ export function listRows(key: string): EntryRow[] {
 }
 
 export function saveRows(key: string, rows: EntryRow[]): void {
-  const next = { ...allRows(), [key]: rows }
-  cache = next
-  if (typeof window !== 'undefined' && window.localStorage) {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
-  }
+  saveAll({ ...allRows(), [key]: rows })
+}
+
+// 跨模块事务一次落库：完工联动、上报联动都走这里，整库一次写入，不写半截。
+export function saveAll(store: Record<string, EntryRow[]>): void {
+  cache = store
+  persist(store)
 }
 
 export function resetRows(key: string): EntryRow[] {
