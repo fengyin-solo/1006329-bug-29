@@ -83,8 +83,8 @@ import type { EntryRow } from '@/data/types'
 
 const meta = moduleMeta('entryapprove')
 const columns = ["申请编号", "申请单位", "作业舱室", "作业类型", "作业人数", "安全措施", "审批人员", "审批状态"]
-const actions = ["提交审批", "确认批准", "驳回申请"]
-const statuses = ["待审批", "已批准", "已驳回", "已完工"]
+const actions = meta.actions
+const statuses = meta.statuses
 const stats = [{"label": "待审批申请", "value": 0}, {"label": "已批准申请", "value": 0}, {"label": "已驳回申请", "value": 0}]
 
 const rows = ref<EntryRow[]>([])

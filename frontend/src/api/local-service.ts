@@ -1,9 +1,17 @@
 import { MODULE_BY_KEY } from '@/data/modules'
 import { allRows, listRows, resetRows, saveRows } from '@/data/local-store'
-import type { ActionResult, EntryRow, ModuleMeta, OverviewResult, PageResult } from '@/data/types'
-
-// 会写进数据的「往回走」动作：命中就把这条记录标成异常态，看板上能一眼看出来。
-const NEGATIVE_ACTIONS = ['撤销', '作废', '拒绝', '驳回', '停用', '忽略', '下线', '回滚']
+import { completeMaintenance, reportPatrolIssue } from '@/data/linkage'
+import { isTerminal, guardTransition } from '@/data/workflow'
+import { validateCompleteInput } from '@/data/maintenance'
+import type {
+  ActionPayload,
+  ActionResult,
+  EntryRow,
+  MaintenanceCompleteInput,
+  ModuleMeta,
+  OverviewResult,
+  PageResult,
+} from '@/data/types'
 
 export function moduleMeta(key: string): ModuleMeta {
   const meta = MODULE_BY_KEY.get(key)
@@ -28,7 +36,21 @@ export function listEntries(key: string, filters: Record<string, string> = {}): 
   return { items: matched, total: matched.length, page: 1, size: matched.length }
 }
 
-export function runAction(key: string, id: number, action: string): ActionResult {
+/** 详情与列表读同一份存储：详情只是按 id 从同一数据源取行，不存在两套口径。 */
+export function getEntry(key: string, id: number): EntryRow | null {
+  return listRows(key).find((row) => Number(row.id) === Number(id)) ?? null
+}
+
+/**
+ * 统一动作入口：先过顺序守卫，跳档一律打回并说明卡在哪一段；
+ * 特例动作（检修完工、巡检上报）在守卫通过后执行联动落库。
+ */
+export function runAction(
+  key: string,
+  id: number,
+  action: string,
+  payload: ActionPayload = {},
+): ActionResult {
   const meta = moduleMeta(key)
   const target = meta.actionTargets[action]
   if (!target) {
@@ -39,20 +61,55 @@ export function runAction(key: string, id: number, action: string): ActionResult
   if (index < 0) {
     return { ok: false, message: `没有找到编号为 ${id} 的${meta.entity}` }
   }
-  const current = String(rows[index].status)
-  if (current === target) {
-    return { ok: false, message: `${meta.entity}已经是「${target}」，不用重复操作` }
+  const current = rows[index]
+  const blocked = guardTransition(key, action, String(current.status))
+
+  // 特例一：检修确认完工（携带完工日期、更换部件、完工结论，一次落库）。
+  if (key === 'maintenance' && action === '确认完工') {
+    if (current.status === '已完工') {
+      // 幂等：同一份记录重复完工只落一次。
+      return { ok: true, message: '该检修记录已完工闭环，重复完工未重复落库' }
+    }
+    if (blocked) {
+      return { ok: false, message: blocked }
+    }
+    const input = payload as unknown as MaintenanceCompleteInput
+    const invalid = validateCompleteInput(input)
+    if (invalid) {
+      return { ok: false, message: invalid }
+    }
+    const outcome = completeMaintenance(id, input)
+    if (typeof outcome === 'string') {
+      return { ok: false, message: outcome }
+    }
+    return {
+      ok: true,
+      message: `检修记录已完工：状态、完工日期、更换部件一次落库；${outcome.deviceNote}`,
+    }
   }
-  const lastStatus = meta.statuses[meta.statuses.length - 1]
+
+  // 特例二：巡检上报问题，问题同步落入值班遗留清单。
+  if (key === 'patrol' && action === '上报问题') {
+    if (blocked) {
+      return { ok: false, message: blocked }
+    }
+    const updated: EntryRow = { ...current, status: target, abnormal: true, pending: !isTerminal(key, target) }
+    saveRows(key, rows.map((row, i) => (i === index ? updated : row)))
+    const note = reportPatrolIssue(updated)
+    return { ok: true, message: note }
+  }
+
+  if (blocked) {
+    return { ok: false, message: blocked }
+  }
+
   const updated: EntryRow = {
-    ...rows[index],
+    ...current,
     status: target,
-    pending: target !== lastStatus,
-    abnormal: NEGATIVE_ACTIONS.some((verb) => action.startsWith(verb)),
+    pending: !isTerminal(key, target),
+    abnormal: current.abnormal,
   }
-  const next = [...rows]
-  next[index] = updated
-  saveRows(key, next)
+  saveRows(key, rows.map((row, i) => (i === index ? updated : row)))
   return { ok: true, message: `${meta.entity}已${action}，当前状态「${target}」` }
 }
 
@@ -68,7 +125,7 @@ export function exportEntries(key: string): { filename: string; content: string 
   for (const row of listRows(key)) {
     lines.push([row.id, ...meta.fields.map((field) => row[field] ?? ''), row.status].join(','))
   }
-  return { filename: `${meta.name}-清单.csv`, content: `\uFEFF${lines.join('\n')}` }
+  return { filename: `${meta.name}-清单.csv`, content: `﻿${lines.join('\n')}` }
 }
 
 export function downloadEntries(key: string): void {

@@ -2,12 +2,11 @@
   <section class="page" data-module="patrol">
     <header class="page-head">
       <div>
-        <h2>廊内巡检任务管理</h2>
-        <p class="page-desc">维护巡检任务，围绕巡检编号、巡检路线、巡检班组、计划日期做登记、筛选与状态流转。</p>
+        <h2>廊内巡检任务</h2>
+        <p class="page-desc">待巡检 → 巡检中 → 已上报 → 已完成顺序推进；上报问题自动落入运维值班遗留清单，两处条数一致。</p>
       </div>
       <div class="page-actions">
-        <button class="btn primary" type="button" @click="openCreate">登记巡检任务</button>
-        <button class="btn" type="button" @click="exportRows">导出廊内巡检任务清单</button>
+        <button class="btn" type="button" @click="exportRows">导出巡检任务清单</button>
       </div>
     </header>
 
@@ -43,14 +42,20 @@
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
-          <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
-          <td>{{ row.status }}</td>
+          <td v-for="column in columns" :key="column">
+            <button v-if="column === '巡检编号'" class="link" type="button" @click="detailId = Number(row.id)">
+              {{ row[column] }}
+            </button>
+            <span v-else :class="{ muted: isEmpty(row[column]) }">{{ isEmpty(row[column]) ? '—' : row[column] }}</span>
+          </td>
+          <td><span :class="['status-tag', statusClass(row.status)]">{{ row.status }}</span></td>
           <td class="row-actions">
             <button
               v-for="action in actions"
               :key="action"
               class="link"
               type="button"
+              :disabled="!canRun(action, row.status)"
               @click="runAction(action, row)"
             >
               {{ action }}
@@ -58,15 +63,18 @@
           </td>
         </tr>
         <tr v-if="!rows.length">
-          <td :colspan="columns.length + 2" class="empty-state">暂无廊内巡检任务数据，可先登记巡检任务</td>
+          <td :colspan="columns.length + 2" class="empty-state">暂无巡检任务数据</td>
         </tr>
       </tbody>
     </table>
 
     <footer class="page-foot">
-      <span>共 {{ total }} 条廊内巡检任务记录</span>
+      <span>共 {{ total }} 条巡检任务 · 已上报问题 {{ reportedCount }} 条，与值班遗留清单同源同数</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
+      <span v-else-if="noticeMessage" class="ok-text">{{ noticeMessage }}</span>
     </footer>
+
+    <DetailDrawer :open="detailId !== null" :module-key="meta.key" :id="detailId" @close="detailId = null" />
   </section>
 </template>
 
@@ -79,59 +87,85 @@ import {
   moduleMeta,
   runAction as applyAction,
 } from '@/api/local-service'
+import DetailDrawer from '@/components/DetailDrawer.vue'
+import { countPatrolLeftovers } from '@/data/linkage'
 import type { EntryRow } from '@/data/types'
 
 const meta = moduleMeta('patrol')
-const columns = ["巡检编号", "巡检路线", "巡检班组", "计划日期", "完成时间", "发现问题数", "巡检人员", "巡检状态"]
-const actions = ["开始巡检", "确认完成", "上报问题"]
-const statuses = ["待巡检", "巡检中", "已完成", "已上报"]
-const stats = [{"label": "待巡检任务", "value": 0}, {"label": "巡检中任务", "value": 0}, {"label": "本月发现问题数", "value": 0}]
+const columns = ['巡检编号', '巡检路线', '巡检班组', '计划日期', '完成时间', '发现问题数', '巡检人员']
+const actions = ['开始巡检', '上报问题', '确认完成']
+const ENABLED: Record<string, string[]> = {
+  开始巡检: ['待巡检'],
+  上报问题: ['巡检中'],
+  确认完成: ['巡检中', '已上报'],
+}
 
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
 const errorMessage = ref('')
+const noticeMessage = ref('')
 const filters = ref<Record<string, string>>({})
-const filterFields = columns.slice(0, 3)
+const filterFields = ['巡检编号', '巡检路线', '巡检班组']
+const detailId = ref<number | null>(null)
+
 const statusSummary = computed(() =>
-  statuses.map((status: string) => ({
+  meta.statuses.map((status: string) => ({
     status,
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
+// 问题条数的唯一口径来自值班遗留清单，保证巡检入口和值班入口看到的数字一致。
+const reportedCount = computed(() => countPatrolLeftovers())
+const stats = computed(() => [
+  { label: '待巡检任务', value: rows.value.filter((r) => r.status === '待巡检').length },
+  { label: '巡检中任务', value: rows.value.filter((r) => r.status === '巡检中').length },
+  { label: '已上报待闭环', value: rows.value.filter((r) => r.status === '已上报').length },
+  { label: '遗留清单条数', value: reportedCount.value },
+])
 
+function canRun(action: string, status: string) {
+  return ENABLED[action].includes(status)
+}
+function statusClass(status: string) {
+  if (status === '已完成') return 'ok'
+  if (status === '已上报') return 'warn'
+  return ''
+}
+function isEmpty(value: unknown) {
+  return value === undefined || value === null || String(value).trim() === ''
+}
 function resetFilters() {
   filters.value = {}
   reload()
 }
-
 function exportRows() {
   downloadEntries(meta.key)
 }
-
-function openCreate() {
-  errorMessage.value = '巡检任务登记入口尚未接入审批流'
-}
-
 function runAction(action: string, row: EntryRow) {
-  errorMessage.value = ''
   const result = applyAction(meta.key, Number(row.id), action)
   if (!result.ok) {
     errorMessage.value = result.message
     return
   }
   reload()
+  noticeMessage.value = result.message
 }
-
 function reload() {
   errorMessage.value = ''
-  try {
-    const payload = listEntries(meta.key, filters.value)
-    rows.value = payload.items
-    total.value = payload.total
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '廊内巡检任务列表读取失败'
-  }
+  noticeMessage.value = ''
+  const payload = listEntries(meta.key, filters.value)
+  rows.value = payload.items
+  total.value = payload.total
 }
 
 onMounted(reload)
 </script>
+
+<style scoped>
+.muted { color: #94a3b8; }
+.ok-text { color: #027a48; }
+.status-tag { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #eef2f7; }
+.status-tag.ok { background: #ecfdf3; color: #027a48; }
+.status-tag.warn { background: #fef3f2; color: #b42318; }
+.row-actions .link:disabled { color: #cbd5e1; cursor: not-allowed; }
+</style>
